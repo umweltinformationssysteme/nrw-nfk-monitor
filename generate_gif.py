@@ -29,21 +29,37 @@ def main():
     print("Öffne und analysiere NetCDF-Datei...")
     ds = xr.open_dataset(nc_file, decode_coords="all")
     
-    # Räumliche Dimensionen für rioxarray sicherstellen
-    if 'lon' in ds.coords and 'lat' in ds.coords:
-        ds = ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat")
-    elif 'longitude' in ds.coords and 'latitude' in ds.coords:
-        ds = ds.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
-        
-    # Falls kein CRS hinterlegt ist, Standard-WGS84 (EPSG:4326) setzen
+    # Räumliche Dimensionen aus den echten Dimensionen (ds.dims) ableiten
+    x_dim = next((d for d in ds.dims if d.lower() in ['x', 'lon', 'longitude']), None)
+    y_dim = next((d for d in ds.dims if d.lower() in ['y', 'lat', 'latitude']), None)
+    
+    if x_dim and y_dim:
+        print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}")
+        ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+    
+    # Intelligente CRS-Erkennung, falls keins in der Datei hinterlegt ist
     if not ds.rio.crs:
-        ds.rio.write_crs("EPSG:4326", inplace=True)
+        if x_dim and x_dim in ds:
+            sample_val = float(ds[x_dim].values[0])
+            # Wenn der Wert klein ist (z.B. zwischen 0 und 20 Grad Länge), ist es WGS84
+            if 0 < sample_val < 20:
+                ds.rio.write_crs("EPSG:4326", inplace=True)
+                print("Kein CRS im NetCDF gefunden. Erkenne WGS84 (EPSG:4326) anhand der Koordinatenwerte.")
+            else:
+                # Wenn der Wert groß ist (Meter), nutzt das UFZ standardmäßig EPSG:3035 (LAEA)
+                ds.rio.write_crs("EPSG:3035", inplace=True)
+                print("Kein CRS im NetCDF gefunden. Erkenne projizierte Koordinaten. Setze EPSG:3035 (LAEA).")
+        else:
+            ds.rio.write_crs("EPSG:4326", inplace=True)
+            print("Kein CRS gefunden und Dimension unlesbar. Setze Standard EPSG:4326.")
+    else:
+        print(f"Erkanntes CRS aus NetCDF-Datei: {ds.rio.crs}")
         
-    # Das NRW-GeoJSON an das Koordinatensystem (CRS) des Rasters anpassen
+    # Das NRW-GeoJSON exakt an das Koordinatensystem (CRS) des Rasters anpassen
     nrw = nrw.to_crs(ds.rio.crs)
     
-    # Die Datenvariable automatisch ermitteln
-    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height'}
+    # Die tatsächliche Datenvariable ermitteln (Metadaten-Variablen ausschließen)
+    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref'}
     var_name = [v for v in ds.data_vars if v not in exclude_vars][0]
     print(f"Erkannte Datenvariable: {var_name}")
     
