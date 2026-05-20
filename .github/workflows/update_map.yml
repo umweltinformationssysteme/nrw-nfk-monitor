@@ -1,40 +1,35 @@
-name: Aktualisiere nFK Karte täglich
+name: Update NRW nFK Map
 
 on:
   schedule:
-    # Führt das Skript täglich um 05:00 UTC (ca. 06:00 oder 07:00 Uhr deutscher Zeit) aus
-    - cron: '0 5 * * *'
-  workflow_dispatch: # Erlaubt es dir, den Prozess jederzeit manuell bei GitHub anzustoßen
+    - cron: '0 6 * * *' # Täglich um 06:00 UTC
+  workflow_dispatch: # Erlaubt es dir, die Action manuell zu starten
 
 jobs:
-  run-script:
+  update-map:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write # Wichtig, damit die Action das GIF ins Repo pushen darf
-
     steps:
-    - name: Code auschecken
-      uses: actions/checkout@v4
+      - name: Repository auschecken
+        uses: actions/checkout@v4
 
-    - name: Python einrichten
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        cache: 'pip'
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
 
-    - name: Abhängigkeiten installieren
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
+      - name: Abhängigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install xarray rioxarray geopandas matplotlib pillow netcdf4 toolz
 
-    - name: GIF generieren
-      run: python generate_gif.py
+      - name: GIF generieren
+        run: python generate_gif.py
 
-    - name: GIF committen und ins Repository pushen
-      run: |
-        git config --global user.name 'github-actions[bot]'
-        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-        git add nrw_nfk_timeseries.gif
-        # Nur committen, wenn sich das GIF tatsächlich verändert hat
-        git diff-index --quiet HEAD || git commit -m "Automatische Aktualisierung der nFK-Zeitreihe"
-        git push
+      - name: Änderungen committen und pushen
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add nrw_nfk_timeseries.gif
+          # Pusht das GIF nur hoch, wenn es sich zum Vortag verändert hat
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Tagesaktuelles nFK GIF aktualisiert" && git push)
