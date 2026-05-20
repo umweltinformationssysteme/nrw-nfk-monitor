@@ -29,58 +29,65 @@ def main():
     print("Öffne und analysiere NetCDF-Datei...", flush=True)
     ds = xr.open_dataset(nc_file, decode_coords="all")
     
-    # Räumliche Dimensionen aus den echten Dimensionen (ds.dims) ableiten
-    x_dim = next((d for d in ds.dims if d.lower() in ['x', 'lon', 'longitude']), None)
-    y_dim = next((d for d in ds.dims if d.lower() in ['y', 'lat', 'latitude']), None)
-    
-    if x_dim and y_dim:
-        print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}", flush=True)
-        ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
-    
-    # --- ULTRA-ROBUSTES ÜBERSCHREIBEN DER METADATEN ---
-    if x_dim and x_dim in ds:
-        x_max = float(ds[x_dim].values.max())
-        
-        # Wenn die Koordinatenwerte im Grad-Bereich liegen (-180 bis 180)
-        if -180 <= x_max <= 180:
-            # Radikal alle alten CRS-Variablen und Grid-Mappings entfernen
-            if 'spatial_ref' in ds.variables:
-                ds = ds.drop_vars('spatial_ref')
-            for var in ds.variables:
-                if 'grid_mapping' in ds[var].attrs:
-                    del ds[var].attrs['grid_mapping']
-            
-            ds.rio.write_crs("EPSG:4326", inplace=True)
-            print("-> Fehlerhaftes Datei-CRS ignoriert. Erzwinge WGS84 (EPSG:4326).", flush=True)
-        else:
-            # Falls die Werte in Metern vorliegen
-            if not ds.rio.crs or "undefined" in str(ds.rio.crs).lower():
-                if 'spatial_ref' in ds.variables:
-                    ds = ds.drop_vars('spatial_ref')
-                for var in ds.variables:
-                    if 'grid_mapping' in ds[var].attrs:
-                        del ds[var].attrs['grid_mapping']
-                        
-                ds.rio.write_crs("EPSG:3035", inplace=True)
-                print("-> Undefined Meter-CRS ersetzt durch Standard EPSG:3035 (LAEA).", flush=True)
-            else:
-                print(f"-> Behalte gültiges Datei-CRS: {ds.rio.crs}", flush=True)
-    else:
-        ds.rio.write_crs("EPSG:4326", inplace=True)
-        print("-> Keine Dimensionen zur Prüfung gefunden. Setze Standard EPSG:4326.", flush=True)
-    # ------------------------------------------------
-        
-    # Das NRW-GeoJSON exakt an das Koordinatensystem (CRS) des Rasters anpassen
-    nrw = nrw.to_crs(ds.rio.crs)
-    
-    # Die tatsächliche Datenvariable ermitteln (Metadaten-Variablen ausschließen)
-    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref'}
+    # Die tatsächliche Datenvariable ermitteln (Metadaten ausschließen)
+    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref', 'grid_mapping'}
     var_name = [v for v in ds.data_vars if v not in exclude_vars][0]
     print(f"Erkannte Datenvariable: {var_name}", flush=True)
     
+    da = ds[var_name]
+    
+    # Automatische Erkennung der räumlichen Dimensionen durch rioxarray absichern
+    x_dim = da.rio.x_dim
+    y_dim = da.rio.y_dim
+    
+    # Fallback-Suche, falls rioxarray die Dimensionen nicht direkt benennen kann
+    if not x_dim or not y_dim:
+        for dim in da.dims:
+            if any(k in str(dim).lower() for k in ['x', 'lon', 'east', 'easting']):
+                x_dim = dim
+            if any(k in str(dim).lower() for k in ['y', 'lat', 'north', 'northing']):
+                y_dim = dim
+        if x_dim and y_dim:
+            da = da.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+
+    print(f"Verwendete räumliche Dimensionen: x={x_dim}, y={y_dim}", flush=True)
+
+    # Wertebereich prüfen (Meter vs. Grad)
+    x_coords = da[x_dim].values if x_dim else []
+    x_max = float(x_coords.max()) if len(x_coords) > 0 else 0
+    print(f"Maximaler Koordinatenwert der X-Achse: {x_max}", flush=True)
+    
+    # --- INTELLIGENTE CRS-REPARATUR ---
+    if da.rio.crs:
+        crs_str = str(da.rio.crs).lower()
+        if "transverse_mercator" in crs_str:
+            # UFZ nutzt eine eigene Transverse Mercator Projektion mit Zentralmeridian 0 im Meter-Bereich.
+            # Wir definieren diese sauber via Proj4, damit pyproj sie fehlerfrei übersetzen kann.
+            clean_crs = "+proj=tmerc +lat_0=0 +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+            da.rio.write_crs(clean_crs, inplace=True)
+            print("-> Dateieigenes Transverse Mercator CRS stabilisiert.", flush=True)
+    else:
+        if x_max > 180:
+            clean_crs = "+proj=tmerc +lat_0=0 +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+            da.rio.write_crs(clean_crs, inplace=True)
+            print("-> Kein CRS gefunden, aber Meter-Werte erkannt. Setze mHM-Standardprojektion.", flush=True)
+        else:
+            da.rio.write_crs("EPSG:4326", inplace=True)
+            print("-> Kein CRS gefunden. Setze Standard EPSG:4326.", flush=True)
+
+    # --- AKTIVE REPROJEKTION NACH WGS84 (GRAD) ---
+    if x_max > 180:
+        print("-> Reprojiziere Rasterdaten aktiv nach EPSG:4326 (WGS84 Grad)...", flush=True)
+        da_gps = da.rio.reproject("EPSG:4326")
+    else:
+        da_gps = da
+
+    # Das NRW-GeoJSON zwingend auf das exakt gleiche System (WGS84 Grad) festlegen
+    nrw = nrw.to_crs("EPSG:4326")
+    
     # 4. Rasterdaten exakt auf die NRW-Grenzen zuschneiden (Clipping)
     print("Schneide Rasterdaten auf NRW-Umring zu...", flush=True)
-    clipped_da = ds[var_name].rio.clip(nrw.geometry, crs=ds.rio.crs, drop=True)
+    clipped_da = da_gps.rio.clip(nrw.geometry, crs="EPSG:4326", drop=True)
     
     # 5. Zeitraum filtern (auf die letzten 14 Tage begrenzen)
     num_days = min(14, len(clipped_da['time']))
