@@ -37,24 +37,37 @@ def main():
         print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}")
         ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
     
-    # --- KORREKTUR FÜR WIDERSPRÜCHLICHE METADATEN ---
+    # --- SAUBERES ÜBERSCHREIBEN DER METADATEN ---
     if x_dim and x_dim in ds:
         x_max = float(ds[x_dim].values.max())
         
         # Wenn die Koordinatenwerte im Grad-Bereich liegen (-180 bis 180),
-        # überschreiben wir das fehlerhafte "Meter"-CRS aus der Datei mit WGS84.
+        # erzwingen wir WGS84 (EPSG:4326)
         if -180 <= x_max <= 180:
-            ds.rio.write_crs("EPSG:4326", override_crs=True, inplace=True)
+            # Alte CRS-Reste radikal entfernen, um Konflikte zu vermeiden
+            if 'spatial_ref' in ds.coords:
+                ds = ds.drop_vars('spatial_ref')
+            for var in ds.variables:
+                if 'grid_mapping' in ds[var].attrs:
+                    del ds[var].attrs['grid_mapping']
+            
+            ds.rio.write_crs("EPSG:4326", inplace=True)
             print("-> Fehlerhaftes Datei-CRS ignoriert. Erzwinge WGS84 (EPSG:4326), da Daten in Grad vorliegen.")
         else:
-            # Falls die Werte wirklich riesig sind (Meter), prüfen wir auf das "undefined" Problem
+            # Falls die Werte wirklich riesig sind (Meter)
             if not ds.rio.crs or "undefined" in str(ds.rio.crs).lower():
-                ds.rio.write_crs("EPSG:3035", override_crs=True, inplace=True)
+                if 'spatial_ref' in ds.coords:
+                    ds = ds.drop_vars('spatial_ref')
+                for var in ds.variables:
+                    if 'grid_mapping' in ds[var].attrs:
+                        del ds[var].attrs['grid_mapping']
+                        
+                ds.rio.write_crs("EPSG:3035", inplace=True)
                 print("-> Undefined Meter-CRS ersetzt durch Standard EPSG:3035 (LAEA).")
             else:
                 print(f"-> Behalte gültiges Datei-CRS: {ds.rio.crs}")
     else:
-        ds.rio.write_crs("EPSG:4326", override_crs=True, inplace=True)
+        ds.rio.write_crs("EPSG:4326", inplace=True)
         print("-> Keine Dimensionen zur Prüfung gefunden. Setze Standard EPSG:4326.")
     # ------------------------------------------------
         
