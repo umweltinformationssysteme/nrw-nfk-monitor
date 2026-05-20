@@ -14,11 +14,11 @@ def main():
     gif_path = "nrw_nfk_timeseries.gif"
     
     # 1. Aktuelle NetCDF-Datei herunterladen
-    print("Lade tagesaktuelle NetCDF-Datei vom UFZ herunter...")
+    print("Lade tagesaktuelle NetCDF-Datei vom UFZ herunter...", flush=True)
     urllib.request.urlretrieve(url, nc_file)
     
     # 2. GeoJSON laden und nach NRW filtern
-    print("Lade GeoJSON und filtere nach NRW...")
+    print("Lade GeoJSON und filtere nach NRW...", flush=True)
     gdf = gpd.read_file(geojson_file)
     nrw = gdf[gdf['GEN'] == 'Nordrhein-Westfalen']
     
@@ -26,7 +26,7 @@ def main():
         raise ValueError("Nordrhein-Westfalen wurde nicht im GeoJSON gefunden! Bitte Prüfen Sie das Attribut 'GEN'.")
     
     # 3. NetCDF-Daten mit xarray öffnen
-    print("Öffne und analysiere NetCDF-Datei...")
+    print("Öffne und analysiere NetCDF-Datei...", flush=True)
     ds = xr.open_dataset(nc_file, decode_coords="all")
     
     # Räumliche Dimensionen aus den echten Dimensionen (ds.dims) ableiten
@@ -34,41 +34,40 @@ def main():
     y_dim = next((d for d in ds.dims if d.lower() in ['y', 'lat', 'latitude']), None)
     
     if x_dim and y_dim:
-        print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}")
+        print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}", flush=True)
         ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
     
-    # --- SAUBERES ÜBERSCHREIBEN DER METADATEN ---
+    # --- ULTRA-ROBUSTES ÜBERSCHREIBEN DER METADATEN ---
     if x_dim and x_dim in ds:
         x_max = float(ds[x_dim].values.max())
         
-        # Wenn die Koordinatenwerte im Grad-Bereich liegen (-180 bis 180),
-        # erzwingen wir WGS84 (EPSG:4326)
+        # Wenn die Koordinatenwerte im Grad-Bereich liegen (-180 bis 180)
         if -180 <= x_max <= 180:
-            # Alte CRS-Reste radikal entfernen, um Konflikte zu vermeiden
-            if 'spatial_ref' in ds.coords:
+            # Radikal alle alten CRS-Variablen und Grid-Mappings entfernen
+            if 'spatial_ref' in ds.variables:
                 ds = ds.drop_vars('spatial_ref')
             for var in ds.variables:
                 if 'grid_mapping' in ds[var].attrs:
                     del ds[var].attrs['grid_mapping']
             
             ds.rio.write_crs("EPSG:4326", inplace=True)
-            print("-> Fehlerhaftes Datei-CRS ignoriert. Erzwinge WGS84 (EPSG:4326), da Daten in Grad vorliegen.")
+            print("-> Fehlerhaftes Datei-CRS ignoriert. Erzwinge WGS84 (EPSG:4326).", flush=True)
         else:
-            # Falls die Werte wirklich riesig sind (Meter)
+            # Falls die Werte in Metern vorliegen
             if not ds.rio.crs or "undefined" in str(ds.rio.crs).lower():
-                if 'spatial_ref' in ds.coords:
+                if 'spatial_ref' in ds.variables:
                     ds = ds.drop_vars('spatial_ref')
                 for var in ds.variables:
                     if 'grid_mapping' in ds[var].attrs:
                         del ds[var].attrs['grid_mapping']
                         
                 ds.rio.write_crs("EPSG:3035", inplace=True)
-                print("-> Undefined Meter-CRS ersetzt durch Standard EPSG:3035 (LAEA).")
+                print("-> Undefined Meter-CRS ersetzt durch Standard EPSG:3035 (LAEA).", flush=True)
             else:
-                print(f"-> Behalte gültiges Datei-CRS: {ds.rio.crs}")
+                print(f"-> Behalte gültiges Datei-CRS: {ds.rio.crs}", flush=True)
     else:
         ds.rio.write_crs("EPSG:4326", inplace=True)
-        print("-> Keine Dimensionen zur Prüfung gefunden. Setze Standard EPSG:4326.")
+        print("-> Keine Dimensionen zur Prüfung gefunden. Setze Standard EPSG:4326.", flush=True)
     # ------------------------------------------------
         
     # Das NRW-GeoJSON exakt an das Koordinatensystem (CRS) des Rasters anpassen
@@ -77,20 +76,18 @@ def main():
     # Die tatsächliche Datenvariable ermitteln (Metadaten-Variablen ausschließen)
     exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref'}
     var_name = [v for v in ds.data_vars if v not in exclude_vars][0]
-    print(f"Erkannte Datenvariable: {var_name}")
+    print(f"Erkannte Datenvariable: {var_name}", flush=True)
     
     # 4. Rasterdaten exakt auf die NRW-Grenzen zuschneiden (Clipping)
-    print("Schneide Rasterdaten auf NRW-Umring zu...")
+    print("Schneide Rasterdaten auf NRW-Umring zu...", flush=True)
     clipped_da = ds[var_name].rio.clip(nrw.geometry, crs=ds.rio.crs, drop=True)
     
     # 5. Zeitraum filtern (auf die letzten 14 Tage begrenzen)
     num_days = min(14, len(clipped_da['time']))
     data_subset = clipped_da.isel(time=slice(-num_days, None))
-    print(f"Erstelle {num_days} Frames für die Animation...")
+    print(f"Erstelle {num_days} Frames für die Animation...", flush=True)
     
-    # -------------------------------------------------------------------------
-    # DEFINITION DEINER SPEZIFISCHEN FARBSKALA
-    # -------------------------------------------------------------------------
+    # Farbskala definieren
     custom_colors = [
         '#F03B20', '#FFAA01', '#FFE9A8', '#FCFFEA', '#F0F9E8', '#D3EFCA',
         '#91D7C6', '#57B6AE', '#2A8EC2', '#2373BE', '#08539D'
@@ -100,19 +97,15 @@ def main():
     cmap = mcolors.ListedColormap(custom_colors)
     cmap.set_over('#07417B')
     norm = mcolors.BoundaryNorm(boundaries, cmap.N)
-    # -------------------------------------------------------------------------
     
-    # Temporären Ordner für die Einzelbilder anlegen
     os.makedirs("frames", exist_ok=True)
     frame_files = []
     
     # 6. Einzelne Karten-Frames generieren
     for i, t in enumerate(data_subset['time']):
-        date_str = str(t.values)[:10]  # Format: YYYY-MM-DD
-        
+        date_str = str(t.values)[:10]
         fig, ax = plt.subplots(figsize=(10, 8), dpi=150)
         
-        # Plotten mit der maßgeschneiderten Farbskala
         data_subset.isel(time=i).plot(
             ax=ax,
             cmap=cmap,
@@ -125,9 +118,7 @@ def main():
             }
         )
         
-        # Grenzen von NRW als schwarze Linie darüberlegen
         nrw.plot(ax=ax, facecolor="none", edgecolor="black", linewidth=1.5)
-        
         ax.set_title(f"Nutzbare Feldkapazität (0-25 cm) - NRW\nStand: {date_str}", fontsize=14, fontweight='bold')
         ax.set_axis_off()
         
@@ -137,24 +128,24 @@ def main():
         frame_files.append(frame_file)
         
     # 7. Animiertes GIF erzeugen
-    print("Erstelle animiertes GIF...")
+    print("Erstelle animiertes GIF...", flush=True)
     imgs = [Image.open(f) for f in frame_files]
     imgs[0].save(
         gif_path,
         save_all=True,
         append_images=imgs[1:],
-        duration=600,  # 600ms pro Tag
-        loop=0         # Endlosschleife
+        duration=600,
+        loop=0
     )
     
-    # Aufräumen von temporären Dateien
-    print("Bereinige temporäre Dateien...")
+    # Aufräumen
+    print("Bereinige temporäre Dateien...", flush=True)
     for f in frame_files:
         os.remove(f)
     os.rmdir("frames")
     os.remove(nc_file)
     
-    print(f"Erfolgreich erstellt: {gif_path}")
+    print(f"Erfolgreich erstellt: {gif_path}", flush=True)
 
 if __name__ == "__main__":
     main()
