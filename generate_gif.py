@@ -29,8 +29,8 @@ def main():
     print("Öffne und analysiere NetCDF-Datei...", flush=True)
     ds = xr.open_dataset(nc_file, decode_coords="all")
     
-    # Die tatsächliche Datenvariable ermitteln (Metadaten ausschließen)
-    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref', 'grid_mapping'}
+    # Die tatsächliche Datenvariable ermitteln (Metadaten/Hilfsvariablen ausschließen)
+    exclude_vars = {'crs', 'time', 'lat', 'lon', 'latitude', 'longitude', 'x', 'y', 'height', 'spatial_ref', 'grid_mapping', 'transverse_mercator'}
     var_name = [v for v in ds.data_vars if v not in exclude_vars][0]
     print(f"Erkannte Datenvariable: {var_name}", flush=True)
     
@@ -40,7 +40,7 @@ def main():
     x_dim = da.rio.x_dim
     y_dim = da.rio.y_dim
     
-    # Fallback-Suche, falls rioxarray die Dimensionen nicht direkt benennen kann
+    # Fallback-Suche nach Dimensionen
     if not x_dim or not y_dim:
         for dim in da.dims:
             if any(k in str(dim).lower() for k in ['x', 'lon', 'east', 'easting']):
@@ -52,37 +52,32 @@ def main():
 
     print(f"Verwendete räumliche Dimensionen: x={x_dim}, y={y_dim}", flush=True)
 
-    # Wertebereich prüfen (Meter vs. Grad)
+    # Maximalen X-Wert ermitteln zur eindeutigen CRS-Bestimmung
     x_coords = da[x_dim].values if x_dim else []
     x_max = float(x_coords.max()) if len(x_coords) > 0 else 0
     print(f"Maximaler Koordinatenwert der X-Achse: {x_max}", flush=True)
     
-    # --- INTELLIGENTE CRS-REPARATUR ---
-    if da.rio.crs:
-        crs_str = str(da.rio.crs).lower()
-        if "transverse_mercator" in crs_str:
-            # UFZ nutzt eine eigene Transverse Mercator Projektion mit Zentralmeridian 0 im Meter-Bereich.
-            # Wir definieren diese sauber via Proj4, damit pyproj sie fehlerfrei übersetzen kann.
-            clean_crs = "+proj=tmerc +lat_0=0 +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
-            da.rio.write_crs(clean_crs, inplace=True)
-            print("-> Dateieigenes Transverse Mercator CRS stabilisiert.", flush=True)
+    # --- PRÄZISE CRS-BESTIMMUNG ---
+    # Falls das eingebettete CRS keine EPSG-Kennung besitzt oder unvollständig ist,
+    # nutzen wir den Koordinatenbereich als mathematisch sicheren Indikator.
+    if da.rio.crs and "epsg" in str(da.rio.crs).lower():
+        print(f"-> Nativ erkanntes CRS: {da.rio.crs}", flush=True)
     else:
-        if x_max > 180:
-            clean_crs = "+proj=tmerc +lat_0=0 +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
-            da.rio.write_crs(clean_crs, inplace=True)
-            print("-> Kein CRS gefunden, aber Meter-Werte erkannt. Setze mHM-Standardprojektion.", flush=True)
+        # Werte im 4-Millionen-Bereich kennzeichnen unmissverständlich Gauss-Krüger Zone 4 (Deutschland Ost/Gesamt)
+        if 4000000 < x_max < 5000000:
+            print("-> Match: Wertebereich entspricht Gauss-Krüger Zone 4. Setze EPSG:31468.", flush=True)
+            da.rio.write_crs("EPSG:31468", inplace=True)
+        elif x_max > 180:
+            print(f"-> Unbekanntes Meterraster (X-Max: {x_max}). Versuche Standard-Reprojektion.", flush=True)
         else:
+            print("-> Koordinaten liegen bereits in Grad vor. Setze EPSG:4326.", flush=True)
             da.rio.write_crs("EPSG:4326", inplace=True)
-            print("-> Kein CRS gefunden. Setze Standard EPSG:4326.", flush=True)
 
     # --- AKTIVE REPROJEKTION NACH WGS84 (GRAD) ---
-    if x_max > 180:
-        print("-> Reprojiziere Rasterdaten aktiv nach EPSG:4326 (WGS84 Grad)...", flush=True)
-        da_gps = da.rio.reproject("EPSG:4326")
-    else:
-        da_gps = da
+    print("-> Reprojiziere Rasterdaten aktiv nach EPSG:4326 (WGS84 Grad)...", flush=True)
+    da_gps = da.rio.reproject("EPSG:4326")
 
-    # Das NRW-GeoJSON zwingend auf das exakt gleiche System (WGS84 Grad) festlegen
+    # Das NRW-GeoJSON ebenfalls auf das gleiche System (WGS84 Grad) festlegen
     nrw = nrw.to_crs("EPSG:4326")
     
     # 4. Rasterdaten exakt auf die NRW-Grenzen zuschneiden (Clipping)
