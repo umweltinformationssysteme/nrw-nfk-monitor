@@ -58,20 +58,27 @@ def main():
     print(f"Maximaler Koordinatenwert der X-Achse: {x_max}", flush=True)
     
     # --- PRÄZISE CRS-BESTIMMUNG ---
-    # Falls das eingebettete CRS keine EPSG-Kennung besitzt oder unvollständig ist,
-    # nutzen wir den Koordinatenbereich als mathematisch sicheren Indikator.
-    if da.rio.crs and "epsg" in str(da.rio.crs).lower():
-        print(f"-> Nativ erkanntes CRS: {da.rio.crs}", flush=True)
+    # Wir prüfen, ob das System einen echten, validen EPSG-Code auflösen kann
+    epsg_code = None
+    if da.rio.crs:
+        try:
+            epsg_code = da.rio.crs.to_epsg()
+        except Exception:
+            pass
+
+    # Wenn kein valider EPSG-Code existiert oder die Projektion als "undefined" markiert ist:
+    if epsg_code is not None and "undefined" not in str(da.rio.crs).lower():
+        print(f"-> Nativ erkanntes valides CRS: EPSG:{epsg_code}", flush=True)
     else:
-        # Werte im 4-Millionen-Bereich kennzeichnen unmissverständlich Gauss-Krüger Zone 4 (Deutschland Ost/Gesamt)
+        # Werte im 4-Millionen-Bereich auf der X-Achse kennzeichnen unmissverständlich Gauss-Krüger Zone 4
         if 4000000 < x_max < 5000000:
-            print("-> Match: Wertebereich entspricht Gauss-Krüger Zone 4. Setze EPSG:31468.", flush=True)
-            da.rio.write_crs("EPSG:31468", inplace=True)
+            print("-> Match: Wertebereich entspricht Gauss-Krüger Zone 4. Überschreibe mit EPSG:31468.", flush=True)
+            da = da.rio.write_crs("EPSG:31468")
         elif x_max > 180:
             print(f"-> Unbekanntes Meterraster (X-Max: {x_max}). Versuche Standard-Reprojektion.", flush=True)
         else:
             print("-> Koordinaten liegen bereits in Grad vor. Setze EPSG:4326.", flush=True)
-            da.rio.write_crs("EPSG:4326", inplace=True)
+            da = da.rio.write_crs("EPSG:4326")
 
     # --- AKTIVE REPROJEKTION NACH WGS84 (GRAD) ---
     print("-> Reprojiziere Rasterdaten aktiv nach EPSG:4326 (WGS84 Grad)...", flush=True)
