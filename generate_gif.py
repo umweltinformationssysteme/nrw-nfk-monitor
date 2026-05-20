@@ -37,23 +37,26 @@ def main():
         print(f"Setze räumliche Dimensionen: x={x_dim}, y={y_dim}")
         ds = ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
     
-    # Intelligente CRS-Erkennung, falls keins in der Datei hinterlegt ist
-    if not ds.rio.crs:
-        if x_dim and x_dim in ds:
-            sample_val = float(ds[x_dim].values[0])
-            # Wenn der Wert klein ist (z.B. zwischen 0 und 20 Grad Länge), ist es WGS84
-            if 0 < sample_val < 20:
-                ds.rio.write_crs("EPSG:4326", inplace=True)
-                print("Kein CRS im NetCDF gefunden. Erkenne WGS84 (EPSG:4326) anhand der Koordinatenwerte.")
-            else:
-                # Wenn der Wert groß ist (Meter), nutzt das UFZ standardmäßig EPSG:3035 (LAEA)
-                ds.rio.write_crs("EPSG:3035", inplace=True)
-                print("Kein CRS im NetCDF gefunden. Erkenne projizierte Koordinaten. Setze EPSG:3035 (LAEA).")
+    # --- KORREKTUR FÜR WIDERSPRÜCHLICHE METADATEN ---
+    if x_dim and x_dim in ds:
+        x_max = float(ds[x_dim].values.max())
+        
+        # Wenn die Koordinatenwerte im Grad-Bereich liegen (-180 bis 180),
+        # überschreiben wir das fehlerhafte "Meter"-CRS aus der Datei mit WGS84.
+        if -180 <= x_max <= 180:
+            ds.rio.write_crs("EPSG:4326", override_crs=True, inplace=True)
+            print("-> Fehlerhaftes Datei-CRS ignoriert. Erzwinge WGS84 (EPSG:4326), da Daten in Grad vorliegen.")
         else:
-            ds.rio.write_crs("EPSG:4326", inplace=True)
-            print("Kein CRS gefunden und Dimension unlesbar. Setze Standard EPSG:4326.")
+            # Falls die Werte wirklich riesig sind (Meter), prüfen wir auf das "undefined" Problem
+            if not ds.rio.crs or "undefined" in str(ds.rio.crs).lower():
+                ds.rio.write_crs("EPSG:3035", override_crs=True, inplace=True)
+                print("-> Undefined Meter-CRS ersetzt durch Standard EPSG:3035 (LAEA).")
+            else:
+                print(f"-> Behalte gültiges Datei-CRS: {ds.rio.crs}")
     else:
-        print(f"Erkanntes CRS aus NetCDF-Datei: {ds.rio.crs}")
+        ds.rio.write_crs("EPSG:4326", override_crs=True, inplace=True)
+        print("-> Keine Dimensionen zur Prüfung gefunden. Setze Standard EPSG:4326.")
+    # ------------------------------------------------
         
     # Das NRW-GeoJSON exakt an das Koordinatensystem (CRS) des Rasters anpassen
     nrw = nrw.to_crs(ds.rio.crs)
